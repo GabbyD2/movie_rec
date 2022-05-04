@@ -1,0 +1,170 @@
+---
+title: "Movie Recommendation Case Statement"
+author: "Me"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r message=FALSE}
+library(arules)
+library(shiny)
+```
+
+
+## Developing recommendations (template for app)
+
+Let's develop a set of recommendations for the set of liked movies in the last chunk.  Since debugging a Shiny app is hard, it's best to anticipate what inputs the app will have, then work through an example by hand of how the app should work.  A powerful way to do this is the define a list object named `input` (since that's what Shiny uses to references what the user selected) and to write code in terms of its elements
+
+```{r}
+load("MOVIERECSpring2022.RData")
+```
+
+In shiny you'll be dealing with user inputs via `input$input_id`.  It can be helpful when planning code to fake a list of inputs.
+
+Example:
+
+```{r}
+# Create an empty container
+input <- list()
+
+# Add in options
+input$selected_options <- c("Space Jam", "Up")
+input$my_checkbox <- TRUE
+
+# Extract the same as in shiny
+input$selected_options
+input$my_checkbox
+```
+
+Below is an example we can use to build our rec engine.
+
+```{r}
+# INPUTS START -------------------------------------------
+input <- list()
+
+# Simulate a selectInput for movies
+
+# Check 1 from assignment page
+input$selected_movies <- c(
+  "Shawshank Redemption, The (1994)","Godfather, The (1972)",
+  "Dark Knight, The (2008)", "Pulp Fiction (1994)",
+  "Schindler's List (1993)","12 Angry Men (1957)",
+  "Inception (2010)","Fight Club (1999)"
+)
+
+# Simulate a numericInput/sliderInput for number of recs
+input$number_of_recs <- 10
+
+# Simulate a numericInput/sliderInput for min rec confidence
+input$min_confidence <- 0.25
+
+# Simulate a numericInput/sliderInput for max popularity allowed
+input$max_popularity <- 5
+
+input$sorting <- 2
+# INPUTS END -------------------------------------------
+
+# REC CODE START   ----------------------------------------
+RECS <- NULL
+if (isTruthy(input$selected_movies)) {
+  # Rule out too popular movies early on
+  too_popular <- POPULARITY$title[which(100 * POPULARITY$percentSeen > input$max_popularity)]
+  
+  # Keep popular movies that the user input
+  too_popular <- setdiff(too_popular, input$selected_movies)
+
+  min_support <- 4
+  max_time <- 0
+
+  RULES <- apriori(
+    TRANS,
+    parameter = list(
+      supp = min_support / length(TRANS),
+      conf = input$min_confidence,
+      minlen = 2,
+      maxtime = max_time
+    ),
+    appearance = list(
+      none = too_popular,
+      lhs = input$selected_movies,
+      default = "rhs"
+    ),
+    control = list(
+      verbose = FALSE
+    )
+  )
+
+  if (length(RULES) > 0) {
+    RULES <- RULES[!is.redundant(RULES)]
+    RULES <- RULES[is.significant(RULES, TRANS)]
+
+    RULESDF <- DATAFRAME(RULES, itemSep = " + ", setStart = "", setEnd = "")
+    names(RULESDF)[1:2] <- c("BasedOn", "title")
+
+    # Remove recs that the user gave as input
+    RULESDF <- RULESDF[!(RULESDF$title %in% input$selected_movies), ]
+    if (nrow(RULESDF) > 0) {
+      RECS <- aggregate(confidence ~ title, data = RULESDF, FUN = max)
+
+      RECS <- merge(RECS, POPULARITY, by = "title")
+
+      RECS$item_id <- NULL
+      RECS$countSeen <- NULL
+      RECS$Year <- NULL
+      names(RECS) <- c("Movie", "Confidence", "PercentSeen", "imdbRating")
+
+      # Order the recommendations by confidence
+      RECS <- RECS[order(RECS$Confidence, decreasing = TRUE), ]
+      #RECS <- RECS[order(RECS[,input$sorting] , decreasing = TRUE), ]
+      RECS <- head(RECS, input$number_of_recs)
+
+      # Take out confusing row names
+      row.names(RECS) <- NULL
+      
+      RECS$Confidence <- round(RECS$Confidence * 100, 2)
+      RECS$PercentSeen <- round(RECS$PercentSeen * 100, 2)
+    }
+  }
+}
+
+if (is.null(RECS)) {
+  RECS <- data.frame(
+    Error = "No recommendations with these parameters.  Add more movies, decrease confidence, or increase popularity!"
+  )
+}
+
+order_by <- RECS[,input$sorting]
+RECS <- RECS[order(RECS$Confidence, decreasing = TRUE), ]
+
+RECS
+# REC CODE END     ----------------------------------------
+```
+
+```{r}
+RECS <- RECS[order(RECS[,2] , decreasing = TRUE), ]
+RECS
+```
+
+
+## Goals of the Assignment 
+
+Your job is to write a Shiny App that serves as a recommendation engine for "hidden games", obscure movies that only a tiny percentage of user of Movielens have rated.
+
+Shiny App requirements:
+
+* A `selectInput` to allow users to select multiple movies to base a recommendation on
+* A `sliderInput` or `numericInput` for user to input number of recommendations (up to 100)
+* A `sliderInput` or `numericInput` for user to input number of minimum confidence
+* A `sliderInput` or `numericInput` where the user inputs the maximum "popularity" of a movie
+  * Popularity as percentage of users in data that have rated the movie at all
+  * Petrie recommends having these popularities as numbers 0-30 to represent the percentages.
+* Give user ability to sort columns
+  * At least choice between sorting by confidence and sorting by title alphabetically
+* A "button" to for users to click to update recommendations
+* A table of recommendations
+  * with 4 columns
+    * Movie title
+    * Confidence (as a number between 0-100; rounded to 1 digit after the decimal)
+    * PercentSeen (as a number between 0-100; rounded to 2 digits after the decimal)
+    * imdbRating
+  * By default sort the table by Confidence
